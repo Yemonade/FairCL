@@ -41,7 +41,7 @@ class Dataset:
 
     def __init__(self, name, df, target_feat, sensitive_feat, test_df=None, categorical_feat=None,
                  drop_feat=None, label_mapping=None, shuffle=False, load_idx=True, idx_path=None,
-                 test_p=0.10, val_p=0.01, *args, **kwargs):
+                 test_p=0.10, val_p=0.2, *args, **kwargs):
         """
         Arguments:
             name: dataset name

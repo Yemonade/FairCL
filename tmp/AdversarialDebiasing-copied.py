@@ -6,14 +6,12 @@ import scipy.special
 import scipy
 from tqdm import tqdm
 from sklearn.base import BaseEstimator, ClassifierMixin
+from sklearn.preprocessing import OneHotEncoder
 from sklearn.utils import check_random_state
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
-
-from eval import Evaluator
-from utils import EarlyStopping
 
 
 class classifier_model(nn.Module):
@@ -89,7 +87,7 @@ class AdversarialDebiasing(BaseEstimator, ClassifierMixin):
             from the adversary.
     """
 
-    def __init__(self, n_features, n_classes, n_groups, scope_name='classifier',
+    def __init__(self, scope_name='classifier',
                  adversary_loss_weight=0.1, num_epochs=50, batch_size=256,
                  classifier_num_hidden_units=200, debias=True, verbose=False,
                  random_state=None):
@@ -130,37 +128,6 @@ class AdversarialDebiasing(BaseEstimator, ClassifierMixin):
 
         self.loss_adv = self.loss_clf = F.binary_cross_entropy_with_logits
 
-        # define the model
-        rng = check_random_state(self.random_state)
-        if self.random_state is not None:
-            self.set_all_seed(self.random_state)
-        else:
-            self.set_all_seed(42)
-        ii32 = np.iinfo(np.int32)
-        self.s1, self.s2, self.s3 = rng.randint(ii32.min, ii32.max, size=3)
-
-        self.batch_id = 0
-
-        starter_learning_rate = 0.001
-        self.clf_model = classifier_model(feature=n_features, Hneuron1=self.classifier_num_hidden_units,
-                                          output=n_classes, dropout=0.2,
-                                          seed1=self.s1, seed2=self.s2).to(self.device)
-        self.init_parameters(self.clf_model)
-        self.classifier_opt = torch.optim.Adam(self.clf_model.parameters(), lr=starter_learning_rate, weight_decay=1e-5)
-        self.clf_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=self.classifier_opt,
-                                                                           T_max=num_epochs)
-
-        if debias:
-            self.adv_model = adversary_model(seed3=self.s3, n_groups=n_groups).to(self.device)
-            self.init_parameters(self.adv_model)
-            self.adversary_opt = torch.optim.Adam(self.adv_model.parameters(), lr=starter_learning_rate,
-                                                  weight_decay=1e-5)
-            self.adv_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=self.adversary_opt,
-                                                                               T_max=num_epochs)
-
-        else:
-            self.adv_model, self.adversary_opt = None, None
-
     def set_all_seed(self, seed):
         os.environ["PL_GLOBAL_SEED"] = str(seed)
         random.seed(seed)
@@ -175,7 +142,7 @@ class AdversarialDebiasing(BaseEstimator, ClassifierMixin):
                 torch.nn.init.normal_(m.weight.data)
                 nn.init.constant_(m.bias.data, 0)
 
-    def fit(self, X, y, s, early_stopping=False, validation_set=None):
+    def fit(self, X, y, s):
         """ Train the classifier and adversary (if ``debias == True``) with the
         given training data.
 
@@ -189,23 +156,12 @@ class AdversarialDebiasing(BaseEstimator, ClassifierMixin):
         """
 
         self.classes_ = np.unique(y)
-        if early_stopping == True:
-            self.early_stopping = EarlyStopping(patience=10)
-            X_val, y_val, s_val = validation_set
-
-            train_evaluator, val_evaluator = self.train_info(s, s_val)
-
-            if scipy.sparse.issparse(X_val):
-                X_val = X_val.todense()
-            X_val = torch.tensor(X_val.astype(np.float32)).to(self.device)
-            y_val = torch.tensor(y_val.astype(np.float32)).to(self.device)
-            s_val = torch.tensor(s_val.astype(np.float32)).to(self.device)
-            y_val = y_val.unsqueeze(1)
-            s_val = s_val.unsqueeze(1)
-            val_loss_list = []
-
-        else:
-            train_evaluator, _ = self.train_info(s)
+        n_classes = len(self.classes_)
+        n_groups = len(np.unique(s))
+        if n_classes == 2:
+            n_classes = 1
+        if n_groups == 2:
+            n_groups = 1
 
         if scipy.sparse.issparse(X):
             X = X.todense()
@@ -214,20 +170,39 @@ class AdversarialDebiasing(BaseEstimator, ClassifierMixin):
         s = torch.tensor(s.astype(np.float32)).to(self.device)
         y = y.unsqueeze(1)
         s = s.unsqueeze(1)
+        rng = check_random_state(self.random_state)
+        if self.random_state is not None:
+            self.set_all_seed(self.random_state)
+        else:
+            self.set_all_seed(42)
+        ii32 = np.iinfo(np.int32)
+        self.s1, self.s2, self.s3 = rng.randint(ii32.min, ii32.max, size=3)
 
+        # use sigmoid for binary case
+
+        num_train_samples, n_features = X.shape
+
+        starter_learning_rate = 0.001
+        self.clf_model = classifier_model(feature=n_features, Hneuron1=self.classifier_num_hidden_units,
+                                          output=n_classes, dropout=0.2,
+                                          seed1=self.s1, seed2=self.s2).to(self.device)
+        self.init_parameters(self.clf_model)
+        classifier_opt = torch.optim.Adam(self.clf_model.parameters(), lr=starter_learning_rate, weight_decay=1e-5)
+
+        # decayRate = 0.96
+        # clf_lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer=classifier_opt, gamma=decayRate)
         # learning_rate = tf.keras.optimizers.schedules.ExponentialDecay(starter_learning_rate,
         #                                                                decay_steps=1000, decay_rate=0.96,
         #                                                                staircase=True)
         # classifier_opt = tf.optimizers.Adam(learning_rate)
         # classifier_vars = [var for var in self.clf_model.trainable_variables]
-        dataBatch = DataLoader(TensorDataset(X, y, s), batch_size=self.batch_size, shuffle=False,
+        dataBatch = DataLoader(TensorDataset(X, y, s), batch_size=self.batch_size, shuffle=True,
                                drop_last=False)
-        loss_list = []
-        train_eval_list = []
-        val_eval_list = []
-        self.batch_id = 0
+        # pretrain_both_models
         if self.debias:
-
+            self.adv_model = adversary_model(seed3=self.s3, n_groups=n_groups).to(self.device)
+            self.init_parameters(self.adv_model)
+            adversary_opt = torch.optim.Adam(self.adv_model.parameters(), lr=starter_learning_rate, weight_decay=1e-5)
             # decayRate = 0.96
             # adv_lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer=adversary_opt, gamma=decayRate)
             # with tqdm(range(self.num_epochs // 2)) as epochs:
@@ -268,23 +243,22 @@ class AdversarialDebiasing(BaseEstimator, ClassifierMixin):
 
             # clf_lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer=classifier_opt, gamma=decayRate)
             # adv_lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer=adversary_opt, gamma=decayRate)
-
             with tqdm(range(self.num_epochs), colour='green') as epochs:
                 epochs.set_description("Adversarial Debiasing Training Epoch")
                 for epoch in epochs:
                     self.adv_model.train()
                     self.clf_model.train()
                     for X_b, y_b, s_b in dataBatch:
-                        self.classifier_opt.zero_grad()
-                        self.adversary_opt.zero_grad()
+                        classifier_opt.zero_grad()
+                        adversary_opt.zero_grad()
                         pred_labels, pred_logits = self.clf_model.forward(X_b)
                         loss1 = self.loss_clf(pred_logits, y_b, reduction='mean')
                         loss1.backward(retain_graph=True)
                         # dW_LP
                         clf_grad = [torch.clone(par.grad.detach()) for par in self.clf_model.parameters()]
 
-                        self.classifier_opt.zero_grad()
-                        self.adversary_opt.zero_grad()
+                        classifier_opt.zero_grad()
+                        adversary_opt.zero_grad()
 
                         pred_protected_attributes_labels, pred_protected_attributes_logits = self.adv_model.forward(
                             pred_logits, y_b)
@@ -304,56 +278,20 @@ class AdversarialDebiasing(BaseEstimator, ClassifierMixin):
                             par.grad = clf_grad[i] - (proj * unit_adversary_grad) - (
                                     self.adversary_loss_weight * adv_grad[i])
 
-                        self.classifier_opt.step()
+                        classifier_opt.step()
                         # optimizing dU_LA
-                        self.adversary_opt.step()
-
+                        adversary_opt.step()
+                        # clf_lr_scheduler.step()
+                        # adv_lr_scheduler.step()
                         acc_adv = (pred_protected_attributes_labels.round() == s_b).float().sum().item() / X_b.size(0)
                         acc_clf = (pred_labels.round() == y_b).float().sum().item() / X_b.size(0)
                         epochs.set_postfix(lossCLF=loss1.item(), lossADV=loss2.item(), accCLF=acc_clf,
                                            accADV=acc_adv)
-
-                        self.batch_id += 1
-                        if self.batch_id % 50 == 0:
-                            loss_list.append((loss1 + self.adversary_loss_weight * loss2).item())
-                            with torch.no_grad():
-                                # loss
-                                self.clf_model.eval()
-                                self.adv_model.eval()
-                                pred_labels_val, pred_logits_val = self.clf_model.forward(X_val)
-                                loss1 = self.loss_clf(pred_logits_val, y_val, reduction='mean')
-                                pred_protected_attributes_labels_val, pred_protected_attributes_logits_val = self.adv_model.forward(
-                                    pred_logits_val, y_val)
-                                loss2 = self.loss_adv(pred_protected_attributes_logits_val, s_val, reduction='mean')
-                                total_loss = (loss1 + self.adversary_loss_weight * loss2).item()
-                                val_loss_list.append(total_loss)
-
-                                # evaluate on train and val
-                                pred_label_train = self.predict(X.squeeze(1).detach().numpy())
-                                train_res = train_evaluator(y.squeeze(1).detach().numpy(), pred_label_train,
-                                                            no_train=False, verbose=False)
-                                train_eval_list.append(train_res)
-
-                                pred_label_val = self.predict(X_val.squeeze(1).detach().numpy())
-                                val_res = val_evaluator(y_val.squeeze(1).detach().numpy(), pred_label_val,
-                                                        no_train=False, verbose=False)
-                                val_eval_list.append(val_res)
-
-                                if early_stopping:
-                                    self.early_stopping(total_loss)
-
-                                    # if self.early_stopping.early_stop == True:
-                                    #     break
-                    # if early_stopping and self.early_stopping.early_stop:
-                    #     break
-                    self.clf_lr_scheduler.step()
-                    self.adv_lr_scheduler.step()
-
             state = {
                 # 'clf_model': self.clf_model.state_dict(),
                 # 'adv_model': self.adv_model.state_dict(),
-                'clf_optimizer': self.classifier_opt.state_dict(),
-                'adv_optimizer': self.adversary_opt.state_dict(),
+                'clf_optimizer': classifier_opt.state_dict(),
+                'adv_optimizer': adversary_opt.state_dict(),
                 # 'epoch': epoch + 1,
             }
             if not os.path.isdir('checkpoint'):
@@ -365,64 +303,155 @@ class AdversarialDebiasing(BaseEstimator, ClassifierMixin):
                 for epoch in epochs:
                     self.clf_model.train()
                     for X_b, y_b, s_b in dataBatch:
-                        self.classifier_opt.zero_grad()
+                        classifier_opt.zero_grad()
                         pred_labels, pred_logits = self.clf_model.forward(X_b)
                         loss = self.loss_clf(pred_logits, y_b, reduction='mean')
                         loss.backward()
-                        self.classifier_opt.step()
+                        classifier_opt.step()
+                        # clf_lr_scheduler.step()
 
                         acc_b = (pred_labels.round() == y_b).float().sum().item() / X_b.size(0)
                         epochs.set_postfix(loss=loss.item(), acc=acc_b)
 
-                        self.batch_id += 1
-                        if self.batch_id % 50 == 0:
-                            loss_list.append(loss.item())
-                            with torch.no_grad():
-                                self.clf_model.eval()
-                                # loss
-                                pred_labels_val, pred_logits_val = self.clf_model.forward(X_val)
-                                loss1 = self.loss_clf(pred_logits_val, y_val, reduction='mean')
-                                val_loss_list.append(loss1.item())
-                                
-                                # evaluate on train and val
-                                pred_label_train = self.predict(X.squeeze(1).detach().numpy())
-                                train_res = train_evaluator(y.squeeze(1).detach().numpy(), pred_label_train,
-                                                            no_train=False, verbose=False)
-                                train_eval_list.append(train_res)
-
-                                pred_label_val = self.predict(X_val.squeeze(1).detach().numpy())
-                                val_res = val_evaluator(y_val.squeeze(1).detach().numpy(), pred_label_val,
-                                                        no_train=False, verbose=False)
-                                val_eval_list.append(val_res)
-
-                                if early_stopping:
-                                    self.early_stopping(loss1)
-                                    # if self.early_stopping.early_stop:
-                                    #     break
-
-                    self.clf_lr_scheduler.step()
-                    # if early_stopping and self.early_stopping.early_stop:
-                    #     break
-
             state = {
                 # 'clf_model': self.clf_model.state_dict(),
                 # 'adv_model': self.adv_model.state_dict(),
-                'clf_optimizer': self.classifier_opt.state_dict(),
+                'clf_optimizer': classifier_opt.state_dict(),
                 # 'epoch': epoch + 1,
             }
             if not os.path.isdir('checkpoint'):
                 os.mkdir('checkpoint')  # 2 、 建立一个保存参数的文件夹
             torch.save(state, './checkpoint/clf_optimizer_state.ckpt')
 
-        return loss_list, val_loss_list, train_eval_list, val_eval_list
+        return self
 
-    def train_info(self, s_train, s_val=None):
-        train_evaluator = Evaluator(s_train, "train")
-        if s_val is not None:
-            val_evaluator = Evaluator(s_val, "val")
-            return train_evaluator, val_evaluator
-        return train_evaluator, None
-
+    # def fit_again(self, X, y, s):
+    #     n_classes = len(self.classes_)
+    #     n_groups = len(np.unique(s))
+    #     if n_classes == 2:
+    #         n_classes = 1
+    #     if n_groups == 2:
+    #         n_groups = 1
+    #
+    #     if scipy.sparse.issparse(X):
+    #         X = X.todense()
+    #     X = torch.tensor(X.astype(np.float32)).to(self.device)
+    #     y = torch.tensor(y.astype(np.float32)).to(self.device)
+    #     s = torch.tensor(s.astype(np.float32)).to(self.device)
+    #     y = y.unsqueeze(1)
+    #     s = s.unsqueeze(1)
+    #
+    #     num_train_samples, n_features = X.shape
+    #
+    #     starter_learning_rate = 0.001
+    #     #####classifier_opt = torch.optim.Adam(self.clf_model.parameters(), lr=starter_learning_rate, weight_decay=1e-5)
+    #
+    #     dataBatch = DataLoader(TensorDataset(X, y, s), batch_size=self.batch_size, shuffle=True,
+    #                            drop_last=False)
+    #     # pretrain_both_models
+    #     if self.debias:
+    #         #####adversary_opt = torch.optim.Adam(self.adv_model.parameters(), lr=starter_learning_rate, weight_decay=1e-5)
+    #         # decayRate = 0.96
+    #         # adv_lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer=adversary_opt, gamma=decayRate)
+    #         # with tqdm(range(self.num_epochs // 2)) as epochs:
+    #         #     epochs.set_description("Classifcation PreTraining Epoch")
+    #         #     for epoch in epochs:
+    #         #         self.clf_model.train()
+    #         #         for X_b, y_b, s_b in dataBatch:
+    #         #             classifier_opt.zero_grad()
+    #         #             pred_labels, pred_logits = self.clf_model.forward(X_b)
+    #         #             # print("pred_labels: ", pred_labels)
+    #         #             # print("y_b: ", y_b)
+    #         #             loss = self.loss_clf(pred_logits, y_b, reduction='mean')
+    #         #             loss.backward()
+    #         #             classifier_opt.step()
+    #         #
+    #         #             clf_lr_scheduler.step()
+    #         #
+    #         #             acc_b = (pred_labels.round() == y_b).float().sum().item()/X_b.size(0)
+    #         #             epochs.set_postfix(loss=loss.item(), acc=acc_b)
+    #         #
+    #         # with tqdm(range(10)) as epochs:
+    #         #     epochs.set_description("Adversarial PreTraining Epoch")
+    #         #     for epoch in epochs:
+    #         #         self.adv_model.train()
+    #         #         self.clf_model.eval()
+    #         #         for X_b, y_b, s_b in dataBatch:
+    #         #             adversary_opt.zero_grad()
+    #         #             pred_labels, pred_logits = self.clf_model.forward(X_b)
+    #         #             pred_protected_attributes_labels, pred_protected_attributes_logits = self.adv_model.forward(
+    #         #                 pred_logits, y_b)
+    #         #             loss = self.loss_adv(pred_protected_attributes_logits, s_b, reduction='mean')
+    #         #             loss.backward()
+    #         #             adversary_opt.step()
+    #         #             adv_lr_scheduler.step()
+    #         #
+    #         #             acc_b = (pred_protected_attributes_labels.round() == s_b).float().sum().item()/X_b.size(0)
+    #         #             epochs.set_postfix(loss=loss.item(), acc=acc_b)
+    #
+    #         # clf_lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer=classifier_opt, gamma=decayRate)
+    #         # adv_lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer=adversary_opt, gamma=decayRate)
+    #         with tqdm(range(self.num_epochs), colour='green') as epochs:
+    #             epochs.set_description("Adversarial Debiasing Training Epoch")
+    #             for epoch in epochs:
+    #                 self.adv_model.train()
+    #                 self.clf_model.train()
+    #                 for X_b, y_b, s_b in dataBatch:
+    #                     classifier_opt.zero_grad()
+    #                     adversary_opt.zero_grad()
+    #                     pred_labels, pred_logits = self.clf_model.forward(X_b)
+    #                     loss1 = self.loss_clf(pred_logits, y_b, reduction='mean')
+    #                     loss1.backward(retain_graph=True)
+    #                     # dW_LP
+    #                     clf_grad = [torch.clone(par.grad.detach()) for par in self.clf_model.parameters()]
+    #
+    #                     classifier_opt.zero_grad()
+    #                     adversary_opt.zero_grad()
+    #
+    #                     pred_protected_attributes_labels, pred_protected_attributes_logits = self.adv_model.forward(
+    #                         pred_logits, y_b)
+    #                     loss2 = self.loss_adv(pred_protected_attributes_logits, s_b, reduction='mean')
+    #                     loss2.backward()
+    #                     # dW_LA
+    #                     adv_grad = [
+    #                         torch.clone(par.grad.detach()) for par in self.clf_model.parameters()
+    #                     ]
+    #
+    #                     for i, par in enumerate(self.clf_model.parameters()):
+    #                         # Normalization
+    #                         unit_adversary_grad = adv_grad[i] / (torch.norm(adv_grad[i]) + torch.finfo(float).tiny)
+    #                         # projection proj_{dW_LA}(dW_LP)
+    #                         proj = torch.sum(torch.inner(unit_adversary_grad, clf_grad[i]))
+    #                         # integrating into the CLF gradient
+    #                         par.grad = clf_grad[i] - (proj * unit_adversary_grad) - (
+    #                                 self.adversary_loss_weight * adv_grad[i])
+    #
+    #                     classifier_opt.step()
+    #                     # optimizing dU_LA
+    #                     adversary_opt.step()
+    #                     # clf_lr_scheduler.step()
+    #                     # adv_lr_scheduler.step()
+    #                     acc_adv = (pred_protected_attributes_labels.round() == s_b).float().sum().item() / X_b.size(0)
+    #                     acc_clf = (pred_labels.round() == y_b).float().sum().item() / X_b.size(0)
+    #                     epochs.set_postfix(lossCLF=loss1.item(), lossADV=loss2.item(), accCLF=acc_clf,
+    #                                        accADV=acc_adv)
+    #     else:
+    #         with tqdm(range(self.num_epochs), colour='green') as epochs:
+    #             epochs.set_description("Classifier Training Epoch")
+    #             for epoch in epochs:
+    #                 self.clf_model.train()
+    #                 for X_b, y_b, s_b in dataBatch:
+    #                     classifier_opt.zero_grad()
+    #                     pred_labels, pred_logits = self.clf_model.forward(X_b)
+    #                     loss = self.loss_clf(pred_logits, y_b, reduction='mean')
+    #                     loss.backward()
+    #                     classifier_opt.step()
+    #                     # clf_lr_scheduler.step()
+    #
+    #                     acc_b = (pred_labels.round() == y_b).float().sum().item() / X_b.size(0)
+    #                     epochs.set_postfix(loss=loss.item(), acc=acc_b)
+    #     return self
+    #
     def decision_function(self, X):
         """Soft prediction scores.
 
@@ -496,7 +525,7 @@ class AdversarialDebiasing(BaseEstimator, ClassifierMixin):
 
         return self.classes_[indices]
 
-    def sorted_loss(self, X, y, s, idx_path):
+    def loss(self, X, y, s, idx_path):
         """ return the loss of each sample"""
         print("========== sort and save ==========")
         X = torch.tensor(X.astype(np.float32)).to(self.device)
@@ -505,27 +534,26 @@ class AdversarialDebiasing(BaseEstimator, ClassifierMixin):
 
         y = y.unsqueeze(1)
         s = s.unsqueeze(1)
-        with torch.no_grad():
-            self.clf_model.eval()
-            if self.debias:
-                self.adv_model.eval()
 
-            pred_labels, pred_logits = self.clf_model.forward(X)
-            loss1 = self.loss_clf(pred_logits, y, reduction='none')
+        self.clf_model.eval()
+        self.adv_model.eval()
 
-            if self.debias:
-                pred_protected_attributes_labels, pred_protected_attributes_logits = self.adv_model.forward(
-                    pred_logits, y)
-                loss2 = self.loss_adv(pred_protected_attributes_logits, s, reduction='none')
-                total_loss_list = torch.flatten((loss1 + self.adversary_loss_weight * loss2))
-            else:
-                total_loss_list = torch.flatten(loss1)
-            print(total_loss_list)
+        pred_labels, pred_logits = self.clf_model.forward(X)
+        loss1 = self.loss_clf(pred_logits, y, reduction='none')
+        pred_protected_attributes_labels, pred_protected_attributes_logits = self.adv_model.forward(
+            pred_logits, y)
+        loss2 = self.loss_adv(pred_protected_attributes_logits, s, reduction='none')
 
-            sorted_loss_idx_value = sorted(enumerate(total_loss_list), key=lambda x: x[1])
-            idx = [i[0] for i in sorted_loss_idx_value]
+        total_loss_list = torch.flatten((loss1 + self.adversary_loss_weight * loss2))
+        print(total_loss_list)
 
-            with open(idx_path, "w") as f:
-                json.dump(idx, f)
+        sorted_loss_idx_value = sorted(enumerate(total_loss_list), key=lambda x: x[1])
+        idx = [i[0] for i in sorted_loss_idx_value]
 
-            return
+        with open(idx_path, "w") as f:
+            json.dump(idx, f)
+
+        return
+
+
+            

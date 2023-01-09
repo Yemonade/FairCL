@@ -4,58 +4,14 @@ import random
 import numpy as np
 import scipy.special
 import scipy
-from matplotlib import pyplot as plt
 from tqdm import tqdm
-# from tqdm import tqdm_notebook as tqdm
-from livelossplot import PlotLosses
 from sklearn.base import BaseEstimator, ClassifierMixin
+from sklearn.preprocessing import OneHotEncoder
 from sklearn.utils import check_random_state
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
-
-from eval import Evaluator
-from utils import EarlyStopping
-
-
-class classifier_model(nn.Module):
-    def __init__(self, feature, Hneuron1, output, dropout, seed1, seed2):
-        super(classifier_model, self).__init__()
-        self.feature = feature
-        self.hN1 = Hneuron1
-        self.output = output
-        self.dropout = dropout
-        self.seed1 = seed1
-        self.seed2 = seed2
-        self.FC1 = nn.Linear(self.feature, self.hN1)
-        self.FC2 = nn.Linear(self.hN1, self.output)
-        self.sigmoid = torch.sigmoid
-        self.relu = F.relu
-        self.Dropout = nn.Dropout(p=self.dropout)
-
-    def forward(self, x):
-        x = self.Dropout(self.relu(self.FC1(x)))
-        x_logits = self.FC2(x)
-        x_pred = self.sigmoid(x_logits)
-        return x_pred, x_logits
-
-
-class adversary_model(nn.Module):
-    def __init__(self, seed3, n_groups=1):
-        super(adversary_model, self).__init__()
-        self.seed3 = seed3
-        self.c = torch.FloatTensor([1.0])
-        self.FC1 = nn.Linear(3, n_groups)
-        self.sigmoid = torch.sigmoid
-
-    # see the paper for the detail
-    def forward(self, pred_logits, true_labels):
-        s = self.sigmoid((1 + torch.abs(self.c.to(pred_logits.device))) * pred_logits)
-        pred_protected_attribute_logits = self.FC1(torch.cat([s, s * true_labels, s * (1.0 - true_labels)], 1))
-        pred_protected_attribute_labels = self.sigmoid(pred_protected_attribute_logits)
-        return pred_protected_attribute_labels, pred_protected_attribute_logits
-
 
 class AdversarialDebiasing(BaseEstimator, ClassifierMixin):
     """Debiasing with adversarial learning.
@@ -177,7 +133,6 @@ class AdversarialDebiasing(BaseEstimator, ClassifierMixin):
             groups['aod'] = ['train_aod', 'val_aod']
         self.liveloss = PlotLosses(groups=groups)
 
-
     def set_all_seed(self, seed):
         os.environ["PL_GLOBAL_SEED"] = str(seed)
         random.seed(seed)
@@ -207,7 +162,6 @@ class AdversarialDebiasing(BaseEstimator, ClassifierMixin):
 
         self.classes_ = np.unique(y)
         # if early_stopping == True:
-        self.patience = patience
         self.early_stopping = EarlyStopping(patience=patience)
         X_val, y_val, s_val = validation_set
 
@@ -249,7 +203,8 @@ class AdversarialDebiasing(BaseEstimator, ClassifierMixin):
                                drop_last=False)
 
         # optimizer
-        self.classifier_opt = torch.optim.Adam(self.clf_model.parameters(), lr=self.starter_learning_rate, weight_decay=1e-5)
+        self.classifier_opt = torch.optim.Adam(self.clf_model.parameters(), lr=self.starter_learning_rate,
+                                               weight_decay=1e-5)
         self.clf_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=self.classifier_opt,
                                                                            T_max=self.num_epochs)
         # self.clf_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(self.classifier_opt, T_0=2, T_mult=2)
@@ -258,7 +213,7 @@ class AdversarialDebiasing(BaseEstimator, ClassifierMixin):
             self.adversary_opt = torch.optim.Adam(self.adv_model.parameters(), lr=self.starter_learning_rate,
                                                   weight_decay=1e-5)
             self.adv_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=self.adversary_opt,
-                                                                                  T_max=self.num_epochs)
+                                                                               T_max=self.num_epochs)
 
             # self.adv_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer=self.adversary_opt, T_0=2, T_mult=2)
 
@@ -329,7 +284,6 @@ class AdversarialDebiasing(BaseEstimator, ClassifierMixin):
                             pred_logits, y_b)
                         loss2 = self.loss_adv(pred_protected_attributes_logits, s_b, reduction='mean')
                         loss2.backward()
-                        print("loss1: ", loss1.item(), "loss2: ", loss2.item())
                         # dW_LA
                         adv_grad = [
                             torch.clone(par.grad.detach()) for par in self.clf_model.parameters()
@@ -354,7 +308,7 @@ class AdversarialDebiasing(BaseEstimator, ClassifierMixin):
                                            accADV=acc_adv)
 
                         self.batch_id += 1
-                        # train_loss_list.append((loss1 + self.adversary_loss_weight * loss2).item())
+                        train_loss_list.append((loss1 + self.adversary_loss_weight * loss2).item())
                         if self.batch_id % 50 == 0:
                             # train_loss_list.append((loss1 + self.adversary_loss_weight * loss2).item())
                             # batch_list.append(self.batch_id)
@@ -363,7 +317,6 @@ class AdversarialDebiasing(BaseEstimator, ClassifierMixin):
                             # plt.ylabel('loss')
                             # plt.title("loss")
                             # plt.pause(0.1)
-
 
                             with torch.no_grad():
                                 # train loss
@@ -377,7 +330,7 @@ class AdversarialDebiasing(BaseEstimator, ClassifierMixin):
                                     pred_logits_train, y)
                                 loss2 = self.loss_adv(pred_protected_attributes_logits_train, s, reduction='mean')
                                 total_loss_train = (loss1 + self.adversary_loss_weight * loss2).item()
-                                train_loss_list.append(total_loss_train)
+                                # train_loss_list.append(total_loss_train)
 
                                 # val loss
                                 pred_labels_val, pred_logits_val = self.clf_model.forward(X_val)
@@ -415,7 +368,7 @@ class AdversarialDebiasing(BaseEstimator, ClassifierMixin):
                                 self.liveloss.send()
 
                                 if early_stopping:
-                                    self.early_stopping(total_loss_train, self)
+                                    self.early_stopping(total_loss_train)
                                     if self.early_stopping.early_stop:
                                         break
                     if early_stopping and self.early_stopping.early_stop:
@@ -470,7 +423,7 @@ class AdversarialDebiasing(BaseEstimator, ClassifierMixin):
                                 pred_labels_val, pred_logits_val = self.clf_model.forward(X_val)
                                 loss1_val = self.loss_clf(pred_logits_val, y_val, reduction='mean')
                                 val_loss_list.append(loss1_val.item())
-                                
+
                                 # evaluate on train and val
                                 pred_label_train = self.predict(X.squeeze(1).detach().numpy())
                                 train_res = train_evaluator(y.squeeze(1).detach().numpy(), pred_label_train,
@@ -500,7 +453,7 @@ class AdversarialDebiasing(BaseEstimator, ClassifierMixin):
                     self.clf_lr_scheduler.step()
 
             self.stopped_batch_ids.append(self.batch_id)
-            
+
             state = {
                 # 'clf_model': self.clf_model.state_dict(),
                 # 'adv_model': self.adv_model.state_dict(),

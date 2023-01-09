@@ -3,7 +3,7 @@
   "test_path": "./data/adult/adult.test",
   "column_names": "age,workclass,fnlwgt,education,education-num,marital-status,occupation,relationship,race,sex,capital-gain,capital-loss,hours-per-week,native-country,income",
   "categorical_feat": "workclass,education,marital-status,occupation,relationship,race,sex,native-country,income",
-  "drop_feat": "",
+  "drop_feat": "marital-status",
   "na_values": "?",
   "target_feat": "income",
   "sensitive_feat": "sex",

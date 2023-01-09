@@ -90,40 +90,40 @@ class Evaluator():
         Returns:
             eop, float, Equal opportunity
         """
-        # grp_y_1 = {}  # {0: [...], [...]}, the predict value of positive sample in each group.
-        # for g in self.all_grp:
-        #     grp_y_1[g] = [pred for i, pred in enumerate(grp_dict[g]["pred"]) if grp_dict[g]["y"][i] == 1]
-        #
-        # if len(self.all_grp) == 2:
-        #     eop = sum(grp_y_1[1]) / len(grp_y_1[1]) - sum(grp_y_1[0]) / len(grp_y_1[0])
-        # else:
-        #     eop = 0.
-        #     for g_i, g_j in itertools.combinations(self.all_grp, 2):
-        #         gap = sum(grp_y_1[g_i]) / len(grp_y_1[g_i]) \
-        #               - sum(grp_y_1[g_j]) / len(grp_y_1[g_j])
-        #         eop += abs(gap)
-        #
-        #     eop /= self.normalized_factor
-        #
-        # return eop
+        grp_y_1 = {}  # {0: [...], [...]}, the predict value of positive sample in each group.
         for g in self.all_grp:
-            grp_dict[g]["pred_cond_pos"] = [e for i, e in enumerate(grp_dict[g]["pred"]) if grp_dict[g]["y"][i] == 1]
+            grp_y_1[g] = [pred for i, pred in enumerate(grp_dict[g]["pred"]) if grp_dict[g]["y"][i] == 1]
 
         if len(self.all_grp) == 2:
-            eop = sum(grp_dict[1.]["pred_cond_pos"]) / len(grp_dict[1.]["pred_cond_pos"]) \
-                  - sum(grp_dict[0.]["pred_cond_pos"]) / len(grp_dict[0.]["pred_cond_pos"])
+            eop = sum(grp_y_1[1]) / len(grp_y_1[1]) - sum(grp_y_1[0]) / len(grp_y_1[0])
         else:
             eop = 0.
-            all_grp = list(self.all_grp)
-            for i, g_1 in enumerate(self.all_grp):
-                for g_2 in all_grp[i + 1:]:
-                    gap = sum(grp_dict[g_1]["pred_cond_pos"]) / len(grp_dict[g_1]["pred_cond_pos"]) \
-                          - sum(grp_dict[g_2]["pred_cond_pos"]) / len(grp_dict[g_2]["pred_cond_pos"])
-                    eop += abs(gap)
+            for g_i, g_j in itertools.combinations(self.all_grp, 2):
+                gap = sum(grp_y_1[g_i]) / len(grp_y_1[g_i]) \
+                      - sum(grp_y_1[g_j]) / len(grp_y_1[g_j])
+                eop += abs(gap)
 
             eop /= self.normalized_factor
 
         return eop
+        # for g in self.all_grp:
+        #     grp_dict[g]["pred_cond_pos"] = [e for i, e in enumerate(grp_dict[g]["pred"]) if grp_dict[g]["y"][i] == 1]
+        #
+        # if len(self.all_grp) == 2:
+        #     eop = sum(grp_dict[1.]["pred_cond_pos"]) / len(grp_dict[1.]["pred_cond_pos"]) \
+        #           - sum(grp_dict[0.]["pred_cond_pos"]) / len(grp_dict[0.]["pred_cond_pos"])
+        # else:
+        #     eop = 0.
+        #     all_grp = list(self.all_grp)
+        #     for i, g_1 in enumerate(self.all_grp):
+        #         for g_2 in all_grp[i + 1:]:
+        #             gap = sum(grp_dict[g_1]["pred_cond_pos"]) / len(grp_dict[g_1]["pred_cond_pos"]) \
+        #                   - sum(grp_dict[g_2]["pred_cond_pos"]) / len(grp_dict[g_2]["pred_cond_pos"])
+        #             eop += abs(gap)
+        #
+        #     eop /= self.normalized_factor
+
+        # return eop
 
     # def eo2(self, y_pred, y_real, s, privileged, unprivileged, labels):
     #     '''
@@ -159,12 +159,14 @@ class Evaluator():
         g0_TN, g0_FP, g0_FN, g0_TP = confusion_matrix(g0_y_true, g0_y_pred, labels=[0,1]).ravel()
         g1_TN, g1_FP, g1_FN, g1_TP = confusion_matrix(g1_y_true, g1_y_pred, labels=[0,1]).ravel()
 
+        # print(g0_TP + g0_FN, sum(g0_y_true))
+        # print(g1_TP + g1_FN, sum(g1_y_true))
         return 0.5 * (abs(g0_FP / sum(g0_y_true) - g1_FP / sum(g1_y_true)) +
                       abs(g0_TP / sum(g0_y_true) - g1_TP / sum(g1_y_true)))
 
 
 
-    def __call__(self, y, pred=None, no_train=True):
+    def __call__(self, y, pred=None, no_train=True, verbose=True):
         """ Evaluate the models.
         Args:
             y: ndarray, the true label
@@ -188,35 +190,41 @@ class Evaluator():
         if len(self.all_grp) == 2:
             difference_avg_odds = self.difference_average_odds(y, pred)
         overall_acc = self.acc(y, pred)
-
-        print("=" * 10, "Results on %s" % self.name, "=" * 10)
+        if verbose:
+            print("=" * 10, "Results on %s" % self.name, "=" * 10)
         group_acc = []
         for g in self.all_grp:
             if no_train:
-                print("Grp. %d - #instance: %d; #pos : %d" %
-                      (g, self.grp_num[g], sum(grp_dict[g]["pred"])))
+                if verbose:
+                    print("Grp. %d - #instance: %d; #pos : %d" %
+                          (g, self.grp_num[g], sum(grp_dict[g]["pred"])))
             else:
                 g_acc = self.acc(grp_dict[g]["y"], grp_dict[g]["pred"])
                 group_acc.append(g_acc)
-                print("Grp. %d - #instance: %d; #pos. pred: %d; Acc.: %.6f" %
-                  (g, self.grp_num[g], sum(grp_dict[g]["pred"]), g_acc))
+                if verbose:
+                    print("Grp. %d - #instance: %d; #pos. pred: %d; Acc.: %.6f" %
+                      (g, self.grp_num[g], sum(grp_dict[g]["pred"]), g_acc))
         if no_train:
             if len(self.all_grp) == 2:
-                print("Demographic parity: %.6f; Equal opportunity: %.6f; Average odds difference: %.6f"
-                      % (dp, eop, difference_avg_odds))
+                if verbose:
+                    print("Demographic parity: %.6f; Equal opportunity: %.6f; Average odds difference: %.6f"
+                          % (dp, eop, difference_avg_odds))
                 res = {"dp": dp, "eop": eop, "average_odds_difference": difference_avg_odds}
             else:
-                print("Demographic parity: %.6f; Equal opportunity: %.6f" % (dp, eop))
+                if verbose:
+                    print("Demographic parity: %.6f; Equal opportunity: %.6f" % (dp, eop))
                 res = {"dp": dp, "eop": eop}
         else:
             if len(self.all_grp) == 2:
-                print("Overall acc.: %.6f; Demographic parity: %.6f; "
-                      "Equal opportunity: %.6f; Average odds difference: %.6f"
-                      % (overall_acc, dp, eop, difference_avg_odds))
+                if verbose:
+                    print("Overall acc.: %.6f; Demographic parity: %.6f; "
+                          "Equal opportunity: %.6f; Average odds difference: %.6f"
+                          % (overall_acc, dp, eop, difference_avg_odds))
                 res = {"overall_acc": overall_acc, "dp": dp, "eop": eop, "average_odds_difference": difference_avg_odds}
             else:
-                print("Overall acc.: %.6f; Demographic parity: %.6f; Equal opportunity: %.6f"
-                      % (overall_acc, dp, eop))
+                if verbose:
+                    print("Overall acc.: %.6f; Demographic parity: %.6f; Equal opportunity: %.6f"
+                          % (overall_acc, dp, eop))
                 res = {"overall_acc": overall_acc, "dp": dp, "eop": eop}
             res.update({"grp_%s_acc" % i: acc for i, acc in enumerate(group_acc)})
 

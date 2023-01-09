@@ -70,7 +70,7 @@ def get_curriculum_stages(y, s, idx_path, N=2):
 class EarlyStopping:
     """Early stops the training if validation loss doesn't improve after a given patience."""
 
-    def __init__(self, patience=7, verbose=False, delta=0, root_path='checkoutpoint/', trace_func=print):
+    def __init__(self, patience=7, verbose=False, delta=0, root_path='checkpoint/', trace_func=print):
         """
         Args:
             patience (int): How long to wait after last time validation loss improved.
@@ -119,21 +119,21 @@ class EarlyStopping:
             self.trace_func(
                 f'Validation loss decreased ({self.val_loss_min:.6f} --> {val_loss:.6f}).  Saving model ...')
 
-        file_path = self.root_path + model.scope_name + str(model.batch_id / 50) + '.pt'
+        file_path = self.root_path + model.scope_name + str(model.batch_id) + '.pt'
         if model.debias:
             save_dict = {
-                model.clf_model.state_dict(),
-                model.classifier_opt.state_dict(),
-                model.clf_lr_scheduler.state_dict(),
-                model.adv_model.state_dict(),
-                model.adversary_opt.state_dict(),
-                model.adv_lr_scheduler.state_dict()
+                'model_clf_model_state_dict': model.clf_model.state_dict(),
+                'model_clf_opt_state_dict': model.classifier_opt.state_dict(),
+                'model_clf_lr_scheduler_state_dict': model.clf_lr_scheduler.state_dict(),
+                'model_adv_model_state_dict': model.adv_model.state_dict(),
+                'model_adversary_opt_state_dict': model.adversary_opt.state_dict(),
+                'model_adv_lr_scheduler': model.adv_lr_scheduler.state_dict()
             }
         else:
             save_dict = {
-                model.clf_model.state_dict(),
-                model.classifier_opt.state_dict(),
-                model.clf_lr_scheduler.state_dict(),
+                'model_clf_model_state_dict': model.clf_model.state_dict(),
+                'model_clf_opt_state_dict': model.classifier_opt.state_dict(),
+                'model_clf_lr_scheduler_state_dict': model.clf_lr_scheduler.state_dict()
             }
         torch.save(save_dict, file_path)
         self.val_loss_min = val_loss

@@ -171,10 +171,10 @@ class AdversarialDebiasing(BaseEstimator, ClassifierMixin):
         self.logs = {}
         groups = {'accuracy': ['train_acc', 'val_acc'],
                   'loss': ['train_loss', 'val_loss']}
-        if self.debias:
-            groups['dp'] = ['train_dp', 'val_dp']
-            groups['eop'] = ['train_eop', 'val_eop']
-            groups['aod'] = ['train_aod', 'val_aod']
+        # if self.debias:
+        groups['dp'] = ['train_dp', 'val_dp']
+        groups['eop'] = ['train_eop', 'val_eop']
+        groups['aod'] = ['train_aod', 'val_aod']
         self.liveloss = PlotLosses(groups=groups)
 
 
@@ -329,7 +329,7 @@ class AdversarialDebiasing(BaseEstimator, ClassifierMixin):
                             pred_logits, y_b)
                         loss2 = self.loss_adv(pred_protected_attributes_logits, s_b, reduction='mean')
                         loss2.backward()
-                        print("loss1: ", loss1.item(), "loss2: ", loss2.item())
+                        # print("loss1: ", loss1.item(), "loss2: ", loss2.item())
                         # dW_LA
                         adv_grad = [
                             torch.clone(par.grad.detach()) for par in self.clf_model.parameters()
@@ -486,6 +486,13 @@ class AdversarialDebiasing(BaseEstimator, ClassifierMixin):
                                 self.logs['val_loss'] = loss1_val
                                 self.logs['train_acc'] = train_res['overall_acc']
                                 self.logs['val_acc'] = val_res['overall_acc']
+
+                                self.logs['train_dp'] = train_res['dp']
+                                self.logs['val_dp'] = val_res['dp']
+                                self.logs['train_eop'] = train_res['eop']
+                                self.logs['val_eop'] = val_res['eop']
+                                self.logs['train_aod'] = train_res['average_odds_difference']
+                                self.logs['val_aod'] = val_res['average_odds_difference']
 
                                 self.liveloss.update(self.logs)
                                 self.liveloss.send()

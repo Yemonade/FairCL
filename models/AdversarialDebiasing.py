@@ -40,6 +40,30 @@ class classifier_model(nn.Module):
         x_pred = self.sigmoid(x_logits)
         return x_pred, x_logits
 
+    # 尝试一下两层的
+    # def __init__(self, feature, Hneuron1, output, dropout, seed1, seed2):
+    #     super(classifier_model, self).__init__()
+    #     self.feature = feature
+    #     self.hN1 = Hneuron1
+    #     self.hN2 = Hneuron1 // 2
+    #     self.output = output
+    #     self.dropout = dropout
+    #     self.FC1 = nn.Linear(self.feature, self.hN1)
+    #     self.FC2 = nn.Linear(self.hN1, self.hN2)
+    #     self.FC3 = nn.Linear(self.hN2, self.output)
+    #
+    #     self.sigmoid = torch.sigmoid
+    #     self.relu = F.relu
+    #     self.Dropout1 = nn.Dropout(p=self.dropout)
+    #     self.Dropout2 = nn.Dropout(p=self.dropout)
+    #
+    # def forward(self, x):
+    #     x = self.Dropout1(self.relu(self.FC1(x)))
+    #     x = self.Dropout2(self.relu(self.FC2(x)))
+    #     x_logits = self.FC3(x)
+    #     x_pred = self.sigmoid(x_logits)
+    #     return x_pred, x_logits
+
 
 class adversary_model(nn.Module):
     def __init__(self, seed3, n_groups=1):
@@ -174,7 +198,7 @@ class AdversarialDebiasing(BaseEstimator, ClassifierMixin):
         # if self.debias:
         groups['dp'] = ['train_dp', 'val_dp']
         groups['eop'] = ['train_eop', 'val_eop']
-        groups['aod'] = ['train_aod', 'val_aod']
+        # groups['aod'] = ['train_aod', 'val_aod']
         self.liveloss = PlotLosses(groups=groups)
 
 
@@ -250,8 +274,14 @@ class AdversarialDebiasing(BaseEstimator, ClassifierMixin):
 
         # optimizer
         self.classifier_opt = torch.optim.Adam(self.clf_model.parameters(), lr=self.starter_learning_rate, weight_decay=1e-5)
+        # self.classifier_opt = torch.optim.LBFGS(self.clf_model.parameters(), lr=self.starter_learning_rate)
+
         self.clf_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=self.classifier_opt,
                                                                            T_max=self.num_epochs)
+
+        # self.clf_lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.classifier_opt, 'min')
+
+
         # self.clf_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(self.classifier_opt, T_0=2, T_mult=2)
 
         if self.debias:
@@ -408,8 +438,8 @@ class AdversarialDebiasing(BaseEstimator, ClassifierMixin):
                                 self.logs['val_dp'] = val_res['dp']
                                 self.logs['train_eop'] = train_res['eop']
                                 self.logs['val_eop'] = val_res['eop']
-                                self.logs['train_aod'] = train_res['average_odds_difference']
-                                self.logs['val_aod'] = val_res['average_odds_difference']
+                                # self.logs['train_aod'] = train_res['average_odds_difference']
+                                # self.logs['val_aod'] = val_res['average_odds_difference']
 
                                 self.liveloss.update(self.logs)
                                 self.liveloss.send()
@@ -491,8 +521,8 @@ class AdversarialDebiasing(BaseEstimator, ClassifierMixin):
                                 self.logs['val_dp'] = val_res['dp']
                                 self.logs['train_eop'] = train_res['eop']
                                 self.logs['val_eop'] = val_res['eop']
-                                self.logs['train_aod'] = train_res['average_odds_difference']
-                                self.logs['val_aod'] = val_res['average_odds_difference']
+                                # self.logs['train_aod'] = train_res['average_odds_difference']
+                                # self.logs['val_aod'] = val_res['average_odds_difference']
 
                                 self.liveloss.update(self.logs)
                                 self.liveloss.send()
@@ -504,6 +534,11 @@ class AdversarialDebiasing(BaseEstimator, ClassifierMixin):
 
                     if early_stopping and self.early_stopping.early_stop:
                         break
+
+                    # val loss
+                    # with torch.no_grad():
+                    # pred_labels_val, pred_logits_val = self.clf_model.forward(X_val)
+                    # loss1_val = self.loss_clf(pred_logits_val, y_val, reduction='mean')
                     self.clf_lr_scheduler.step()
 
             self.stopped_batch_ids.append(self.batch_id)

@@ -63,10 +63,16 @@ class Dataset:
         print("Loading %s dataset.." % name)
 
         self.categorical_feat = categorical_feat if categorical_feat is not None else []
+
+        # print("self.categorical_feat: ", self.categorical_feat)
+        # print("df.columns: ", df.columns)
         self.num_feat = df.columns.difference(self.categorical_feat)
+
         self.categorical_feat.remove(sensitive_feat)
         self.categorical_feat.remove(target_feat)
 
+        # print("self.num_feat: ", self.num_feat)
+        # print("self.categorical_feat: ", self.categorical_feat)
 
         # shuffle the rows
         if shuffle:
@@ -97,6 +103,7 @@ class Dataset:
         print("train_val_df.shape: ", train_val_df.shape)
         print("test_df.shape: ", test_df.shape)
         # get sensitive columns after mapping
+
         s_train_val, s_test = train_val_df[sensitive_feat].to_numpy(), test_df[sensitive_feat].to_numpy()
 
         train_val_df.drop(columns=sensitive_feat, inplace=True)
@@ -193,11 +200,6 @@ class AdultDataset(Dataset):
 
         # remove the "." at the end of each "income"
         test["income"] = [e[:-1] for e in test["income"].values]
-        # train = self.custom_preprocessing(train)
-        # test = self.custom_preprocessing(test)
-
-        # meta["categorical_feat"].extend(["Education Years", "Age (decade)"])
-        # print("meta[categorical_feat]:", meta["categorical_feat"])
         super(AdultDataset, self).__init__(name="Adult", df=train, test_df=test, **meta, shuffle=False)
 
     def custom_preprocessing(self, df):
@@ -241,13 +243,109 @@ class CompasDataset(Dataset):
 
     def __init__(self):
         meta = json.load(open("data/compas/meta.json"))
+        meta["categorical_feat"] = meta["categorical_feat"].split(",")
+
 
         df = pd.read_csv(meta["train_path"], index_col='id')
         df = self.default_preprocessing(df)
         df = df[meta["features_to_keep"].split(",")]
+        # print(df)
 
-        super(CompasDataset, self).__init__(name="Compas", df=df, **meta, shuffle=False)
+        super(CompasDataset, self).__init__(name="Compas", df=df, test_p=0.1, val_p=0.1, **meta, shuffle=True)
 
+    @staticmethod
+    def custom_preprocessing(df):
+        """The custom pre-processing function is adapted from
+            https://github.com/fair-preprocessing/nips2017/blob/master/compas/code/Generate_Compas_Data.ipynb
+        """
+
+        df = df[['age', 'c_charge_degree', 'race', 'age_cat', 'score_text',
+                 'sex', 'priors_count', 'days_b_screening_arrest', 'decile_score',
+                 'is_recid', 'two_year_recid', 'c_jail_in', 'c_jail_out']]
+
+        # Indices of data samples to keep
+        ix = df['days_b_screening_arrest'] <= 30
+        ix = (df['days_b_screening_arrest'] >= -30) & ix
+        ix = (df['is_recid'] != -1) & ix
+        ix = (df['c_charge_degree'] != "O") & ix
+        ix = (df['score_text'] != 'N/A') & ix
+        df = df.loc[ix,:]
+        df['length_of_stay'] = (pd.to_datetime(df['c_jail_out'])-
+                                pd.to_datetime(df['c_jail_in'])).apply(
+                                                        lambda x: x.days)
+
+        # Restrict races to African-American and Caucasian
+        dfcut = df.loc[~df['race'].isin(['Native American','Hispanic','Asian','Other']),:]
+
+        # Restrict the features to use
+        dfcutQ = dfcut[['sex','race','age_cat','c_charge_degree','score_text','priors_count','is_recid',
+                'two_year_recid','length_of_stay']].copy()
+
+        # Quantize priors count between 0, 1-3, and >3
+        def quantizePrior(x):
+            if x <=0:
+                return '0'
+            elif 1<=x<=3:
+                return '1 to 3'
+            else:
+                return 'More than 3'
+
+        # Quantize length of stay
+        def quantizeLOS(x):
+            if x<= 7:
+                return '<week'
+            if 8<x<=93:
+                return '<3months'
+            else:
+                return '>3 months'
+
+        # Quantize length of stay
+        def adjustAge(x):
+            if x == '25 - 45':
+                return '25 to 45'
+            else:
+                return x
+
+        # Quantize score_text to MediumHigh
+        def quantizeScore(x):
+            if (x == 'High')| (x == 'Medium'):
+                return 'MediumHigh'
+            else:
+                return x
+
+        def race(row):
+            return 'Caucasian' if row['race'] == "Caucasian" else 'Not Caucasian'
+
+        def two_year_recid(row):
+            return 'Did recid.' if row['two_year_recid'] == 1 else 'No recid.'
+
+        # def group_race(x):
+        #     if x == "Caucasian":
+        #         return 1.0
+        #     else:
+        #         return 0.0
+
+        dfcutQ['priors_count'] = dfcutQ['priors_count'].apply(lambda x: quantizePrior(x))
+        dfcutQ['length_of_stay'] = dfcutQ['length_of_stay'].apply(lambda x: quantizeLOS(x))
+        dfcutQ['score_text'] = dfcutQ['score_text'].apply(lambda x: quantizeScore(x))
+        dfcutQ['age_cat'] = dfcutQ['age_cat'].apply(lambda x: adjustAge(x))
+
+        # Recode sex and race
+        # dfcutQ['sex'] = dfcutQ['sex'].replace({'Female': 1.0, 'Male': 0.0})
+        # dfcutQ['race'] = dfcutQ['race'].apply(lambda x: group_race(x))
+
+        dfcutQ['race'] = df.apply(lambda row: race(row), axis=1)
+        dfcutQ['two_year_recid'] = df.apply(lambda row: two_year_recid(row), axis=1)
+
+        features = ['two_year_recid',
+                    'sex', 'race',
+                    'age_cat', 'priors_count', 'c_charge_degree']
+
+        # Pass vallue to df
+        df = dfcutQ[features]
+
+
+        return df
     @staticmethod
     def default_preprocessing(df):
         """
@@ -269,6 +367,80 @@ class CompasDataset(Dataset):
                   & (df.is_recid != -1)
                   & (df.c_charge_degree != 'O')
                   & (df.score_text != 'N/A')]
+
+class CompasDataset2:
+    def __init__(self):
+        meta = json.load(open("data/compas/meta1.json"))
+        sensitive_feat = meta['sensitive_feat']
+        target_feat = meta['target_feat']
+        train_val_df = pd.read_csv(meta['train_path'])
+        test_df = pd.read_csv(meta['test_path'])
+        val_p = 0.2
+
+        train_val_df = self.default_preprocessing(train_val_df, meta)
+        test_df = self.default_preprocessing(test_df, meta)
+
+        s_train_val, s_test = train_val_df[sensitive_feat].to_numpy(), test_df[sensitive_feat].to_numpy()
+
+        train_val_df.drop(columns=sensitive_feat, inplace=True)
+        test_df.drop(columns=sensitive_feat, inplace=True)
+
+        # separate target feature from dataset
+        y_train_val, y_test = train_val_df[target_feat].to_numpy(), test_df[target_feat].to_numpy()
+        train_val_df, test_df = train_val_df.drop(columns=target_feat), test_df.drop(columns=target_feat)
+
+        # split the train_val to train and validation
+        num_val = round(len(train_val_df) * val_p)
+        num_train = len(train_val_df) - num_val
+
+        if num_val != 0:
+            self.x_train, self.x_val = train_val_df.iloc[:num_train].to_numpy(), train_val_df.iloc[num_train:].to_numpy()
+            self.y_train, self.y_val = y_train_val[:num_train], y_train_val[num_train:]
+            self.s_train, self.s_val = s_train_val[:num_train], s_train_val[num_train:]
+
+        else:
+            self.x_train, self.x_val = train_val_df, None
+            self.y_train, self.y_val = y_train_val, None
+            self.   s_train, self.s_val = s_train_val, None
+
+        self.x_test, self.y_test, self.s_test = test_df.to_numpy(), y_test, s_test
+
+    @property
+    def data(self):
+        return DataTemplate(self.x_train, self.y_train, self.s_train,
+                            self.x_val, self.y_val, self.s_val,
+                            self.x_test, self.y_test, self.s_test)
+    @staticmethod
+    def default_preprocessing(df, meta):
+        """
+        Perform the same preprocessing as the original analysis:
+        https://github.com/propublica/compas-analysis/blob/master/Compas%20Analysis.ipynb
+        """
+
+        df.drop(columns=['sex-race'], inplace=True)
+
+        def race(row):
+            return 'Caucasian' if row['race'] == "Caucasian" else 'Not Caucasian'
+
+        def two_year_recid(row):
+            return 'Did recid.' if row['two_year_recid'] == 1 else 'No recid.'
+
+        df['race'] = df.apply(lambda row: race(row), axis=1)
+        df['two_year_recid'] = df.apply(lambda row: two_year_recid(row), axis=1)
+
+        sensitive_feat = meta['sensitive_feat']
+        target_feat = meta['target_feat']
+        label_mapping = meta['label_mapping']
+
+        df[sensitive_feat] = df[sensitive_feat].map(label_mapping[sensitive_feat])
+        df[target_feat] = df[target_feat].map(label_mapping[target_feat])
+
+        df['sex'] = df['sex'].map({
+                              "Male": 1.0,
+                              "Female": 0.0
+                            })
+
+        return df
 
 
 class GermanDataset(Dataset):
@@ -323,7 +495,7 @@ def fetch_data(name):
     if name == "adult":
         return AdultDataset().data
     elif name == "compas":
-        return CompasDataset().data
+        return CompasDataset2().data
     elif name == "german":
         return GermanDataset().data
     else:
@@ -331,5 +503,5 @@ def fetch_data(name):
 
 
 if __name__ == "__main__":
-    data = fetch_data("adult")
+    data = fetch_data("compas")
     fair_stat(data)

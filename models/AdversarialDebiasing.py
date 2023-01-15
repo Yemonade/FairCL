@@ -36,6 +36,9 @@ class classifier_model(nn.Module):
 
     def forward(self, x):
         x = self.Dropout(self.relu(self.FC1(x)))
+        # print("x: ", x)
+        # print("self.FC1.weight: ", self.FC1.bias.data)
+        # print("="*50)
         x_logits = self.FC2(x)
         x_pred = self.sigmoid(x_logits)
         return x_pred, x_logits
@@ -359,7 +362,7 @@ class AdversarialDebiasing(BaseEstimator, ClassifierMixin):
                             pred_logits, y_b)
                         loss2 = self.loss_adv(pred_protected_attributes_logits, s_b, reduction='mean')
                         loss2.backward()
-                        # print("loss1: ", loss1.item(), "loss2: ", loss2.item())
+                        print("loss1: ", loss1.item(), "loss2: ", loss2.item())
                         # dW_LA
                         adv_grad = [
                             torch.clone(par.grad.detach()) for par in self.clf_model.parameters()
@@ -367,7 +370,7 @@ class AdversarialDebiasing(BaseEstimator, ClassifierMixin):
 
                         for i, par in enumerate(self.clf_model.parameters()):
                             # Normalization
-                            unit_adversary_grad = adv_grad[i] / (torch.norm(adv_grad[i]) + torch.finfo(float).tiny)
+                            unit_adversary_grad = adv_grad[i] / (torch.norm(adv_grad[i]) + torch.finfo(float).tiny + 1e-8)
                             # projection proj_{dW_LA}(dW_LP)
                             proj = torch.sum(torch.inner(unit_adversary_grad, clf_grad[i]))
                             # integrating into the CLF gradient
